@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>五亭桥贴图模型 - 独立测试</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#1a1a2e; overflow:hidden; font-family:system-ui; }
+#info {
+  position:fixed; top:10px; left:10px; z-index:100;
+  background:rgba(0,0,0,0.7); color:#fff; padding:12px 16px;
+  border-radius:8px; font-size:13px; line-height:1.8;
+  max-width:480px;
+}
+#info .ok { color:#4f8; }
+#info .err { color:#f44; }
+#info .warn { color:#fa4; }
+#info .key { color:#8df; }
+canvas { display:block; }
+</style>
+</head>
+<body>
+
+<div id="info">
+  <strong>🌉 五亭桥独立测试页面</strong><br>
+  <span class="key">状态:</span> <span id="status">初始化中...</span><br>
+  <span class="key">OBJ:</span> <span id="objStatus">等待</span><br>
+  <span class="key">MTL:</span> <span id="mtlStatus">等待</span><br>
+  <span class="key">材质数:</span> <span id="matCount">-</span><br>
+  <span class="key">子对象:</span> <span id="childCount">-</span><br>
+  <span class="key">Mesh数:</span> <span id="meshCount">-</span><br>
+  <span class="key">控制:</span> 左键旋转 / 右键平移 / 滚轮缩放
+</div>
+
+<!-- Three.js r128 from CDN -->
+<script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+<script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://unpkg.com/three@0.160.0/examples/js/loaders/OBJLoader.js"></script>
+<script src="https://unpkg.com/three@0.160.0/examples/js/loaders/MTLLoader.js"></script>
+
+<script>
+// ===== 配置 =====
+const MODEL_BASE = './models/五亭桥带贴图模型-新2/';
+const OBJ_FILE = '五亭桥模型.obj';
+const MTL_FILE = 'Meshy_AI_Pavilion_Bridge_0630074245_texture.mtl';
+
+// ===== 场景初始化 =====
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(45, window.innerWidth/window.innerHeight, 0.01, 2000);
+camera.position.set(3, 2, 5);
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+document.body.appendChild(renderer.domElement);
+
+// 灯光
+const hemiLight = new THREE.HemisphereLight(0xfff8ee, 0xc4a87c, 1.0);
+scene.add(hemiLight);
+const ambient = new THREE.AmbientLight(0xfff8f0, 1.2);
+scene.add(ambient);
+const dirLight = new THREE.DirectionalLight(0xfff5e6, 1.5);
+dirLight.position.set(8, 10, 5);
+scene.add(dirLight);
+
+// 控制器
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.target.set(0, 0, 0);
+
+// 辅助网格
+const grid = new THREE.GridHelper(20, 40, 0x444444, 0x333333);
+grid.position.y = -2;
+scene.add(grid);
+
+// ===== 状态更新函数 =====
+function setStatus(msg, cls='ok') {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = cls;
+}
+function setObjStatus(msg, cls) {
+  const el = document.getElementById('objStatus');
+  el.textContent = msg;
+  if(cls) el.className = cls;
+}
+function setMtlStatus(msg, cls) {
+  const el = document.getElementById('mtlStatus');
+  el.textContent = msg;
+  if(cls) el.className = cls;
+}
+
+// ===== 加载流程 =====
+let loadedObj = null;
+
+setStatus('正在加载 MTL...', 'warn');
+
+const mtlLoader = new MTLLoader();
+mtlLoader.setResourcePath(MODEL_BASE);
+mtlLoader.setPath(MODEL_BASE);
+
+mtlLoader.load(MTL_FILE, function(materials) {
+  // MTL 加载完成
+  setMtlStatus('✅ 已加载', 'ok');
+
+  // 遍历所有材质，打印信息
+  const matNames = Object.keys(materials.materials);
+  document.getElementById('matCount').textContent = matNames.length + ' (' + matNames.join(', ') + ')';
+
+  console.log('=== MTL 材质详情 ===');
+  for (const name of matNames) {
+    const m = materials.materials[name];
+    console.log(`材质 "${name}":`, {
+      map: m.map ? m.map.image?.src || '有纹理' : '无纹理',
+      color: m.color ? '#' + m.color.getHexString() : null,
+      transparent: m.transparent,
+      opacity: m.opacity,
+      side: m.side
+    });
+  }
+
+  materials.preload(); // 预加载纹理
+
+  // 加载 OBJ
+  setObjStatus('正在加载...', 'warn');
+  setStatus('正在加载 OBJ...');
+
+  const objLoader = new OBJLoader();
+  objLoader.setMaterials(materials);
+  objLoader.setPath(MODEL_BASE);
+
+  objLoader.load(OBJ_FILE, function(obj) {
+    // OBJ 加载完成
+    loadedObj = obj;
+
+    let meshCount = 0;
+    let totalVerts = 0;
+    let childInfo = [];
+
+    obj.traverse(function(child) {
+      if (child.isMesh) {
+        meshCount++;
+        const geo = child.geometry;
+        totalVerts += geo.attributes.position ? geo.attributes.position.count : 0;
+
+        const mat = child.material;
+        const hasMap = mat && (Array.isArray(mat) ? mat[0]?.map : mat?.map);
+        const mapInfo = hasMap ? '🖼️' : '⚪️';
+
+        childInfo.push(`${mapMap} ${child.name || '(unnamed)'} | verts=${geo.attributes?.position?.count||0}`);
+      } else if (child.isLine || child.isLineSegments) {
+        childInfo.push(`〰️ ${child.name || 'line'} | type=${child.type}`);
+      } else if (child.isPoints) {
+        childInfo.push(`· · · points | count=${child.geometry?.attributes?.position?.count}`);
+      }
+    });
+
+    document.getElementById('childCount').textContent = (obj.children?.length || 0) + ' — ' + childInfo.slice(0,8).join('; ');
+    document.getElementById('meshCount').textContent = meshCount + ' meshes, ' + totalVerts + ' verts';
+
+    console.log('=== OBJ 结构 ===');
+    console.log('总子对象:', obj.children?.length);
+    console.log('Mesh 数量:', meshCount);
+    console.log('总顶点:', totalVerts);
+    console.log('子对象详情:', childInfo);
+
+    // 计算包围盒并居中
+    const box = new THREE.Box3().setFromObject(obj);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+
+    console.log('包围盒中心:', center);
+    console.log('包围盒大小:', size);
+
+    obj.position.sub(center); // 居中
+
+    // 根据大小调整相机距离
+    const maxDim = Math.max(size.x, size.y, size.z);
+    const fov = camera.fov * (Math.PI / 180);
+    const dist = (maxDim / 2) / Math.tan(fov / 2) * 2;
+    camera.position.set(dist * 0.6, dist * 0.4, dist * 0.8);
+    controls.target.set(0, 0, 0);
+    controls.update();
+
+    scene.add(obj);
+    setObjStatus(`✅ ${meshCount}个Mesh, ${totalVerts}顶点`, 'ok');
+    setStatus(`✅ 加载完成! 大小=${maxDim.toFixed(2)}`, 'ok');
+
+  }, function(xhr) {
+    // 进度
+    if (xhr.total > 0) {
+      const pct = (xhr.loaded / xhr.total * 100).toFixed(1);
+      setObjStatus(`加载中 ${pct}%`, 'warn');
+    } else {
+      setObjStatus(`已下载 ${(xhr.loaded/1024/1024).toFixed(1)}MB`, 'warn');
+    }
+  }, function(err) {
+    // 错误
+    console.error('OBJ 加载失败:', err);
+    setObjStatus('❌ 失败! ' + (err.message || err), 'err');
+    setStatus('OBJ 加载失败', 'err');
+  });
+
+}, function(err) {
+  // MTL 加载失败
+  console.error('MTL 加载失败:', err);
+  setMtlStatus('❌ 失败!', 'err');
+  setStatus('MTL 加载失败: ' + (err.message || err), 'err');
+});
+
+// ===== 渲染循环 =====
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+
+  // 轻微自转（方便观察）
+  if (loadedObj && !controls.isRotating) {
+    // loadedObj.rotation.y += 0.001;
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+
+// ===== 响应式 =====
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+</script>
+
+</body>
+</html>
